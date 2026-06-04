@@ -1,6 +1,5 @@
 from uuid import UUID
-import httpx
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from structlog import get_logger
 
@@ -18,9 +17,14 @@ async def get_settings() -> Settings:
 
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
     settings: Settings = Depends(get_settings),
 ) -> dict:
+    internal_key = request.headers.get("X-Internal-Api-Key")
+    if internal_key and internal_key == settings.internal_api_key:
+        return {"user_id": None, "email": "internal@service", "is_internal": True}
+
     if not credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing authorization header"
@@ -50,4 +54,5 @@ async def get_current_user(
     return {
         "user_id": UUID(payload["sub"]),
         "email": payload.get("email", ""),
+        "is_internal": False,
     }

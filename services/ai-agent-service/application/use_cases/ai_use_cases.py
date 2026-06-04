@@ -53,47 +53,51 @@ class QueryUseCase:
             return ""
         query_lower = user_query.lower()
         parts: list[str] = []
+        headers = {"X-Internal-Api-Key": "toka-internal-key-2024"}
 
         if any(w in query_lower for w in ["usuario", "user", "usuarios", "users", "cuenta", "account", "rol", "role", "permiso", "permission"]):
             try:
-                resp = await self._http.get(f"{self._user_service_url}/api/v1/users?page=1&size=20", timeout=10.0)
+                resp = await self._http.get(f"{self._user_service_url}/api/v1/users?page=1&size=20", headers=headers, timeout=10.0)
                 if resp.status_code == 200:
                     data = resp.json()
                     users = data if isinstance(data, list) else data.get("items", data.get("results", []))
                     if users:
-                        parts.append(f"Users in the system ({len(users)} shown):")
+                        parts.append(f"Users in the system ({len(users)} shown, {data.get('total', '?')} total):")
                         for u in users:
-                            parts.append(f"  - {u.get('email', '?')} | username: {u.get('username', '?')} | active: {u.get('is_active', '?')} | roles: {u.get('roles', u.get('role_ids', []))}")
+                            parts.append(f"  - {u.get('email', '?')} | username: {u.get('username', '?')} | active: {u.get('is_active', '?')} | created: {u.get('created_at', '?')}")
             except Exception as e:
-                await logger.awarning("live_context_user_failed", error=str(e))
+                await logger.awarning("live_context_users_failed", error=str(e))
 
             try:
-                resp = await self._http.get(f"{self._user_service_url}/api/v1/roles", timeout=10.0)
+                resp = await self._http.get(f"{self._user_service_url}/api/v1/roles", headers=headers, timeout=10.0)
                 if resp.status_code == 200:
-                    roles = resp.json()
+                    data = resp.json()
+                    roles = data if isinstance(data, list) else data.get("items", [])
                     if roles:
                         parts.append(f"Roles in the system ({len(roles)} total):")
                         for r in roles:
-                            parts.append(f"  - {r.get('name', '?')}: {r.get('description', '')} | permissions: {r.get('permissions', [])}")
+                            perms = [p.get("name", "") for p in r.get("permissions", []) if isinstance(p, dict)]
+                            parts.append(f"  - {r.get('name', '?')}: {r.get('description', '')} | permissions: {', '.join(perms)}")
             except Exception as e:
                 await logger.awarning("live_context_roles_failed", error=str(e))
 
         if any(w in query_lower for w in ["auditoría", "audit", "log", "actividad", "activity", "evento", "event"]):
             try:
-                resp = await self._http.get(f"{self._audit_service_url}/api/v1/audit/logs?page=1&size=20", timeout=10.0)
+                resp = await self._http.get(f"{self._audit_service_url}/api/v1/audit/logs?page=1&size=20", headers=headers, timeout=10.0)
                 if resp.status_code == 200:
                     data = resp.json()
                     logs = data if isinstance(data, list) else data.get("items", data.get("results", []))
                     if logs:
-                        parts.append(f"Recent audit logs ({len(logs)} shown):")
+                        parts.append(f"Recent audit logs ({len(logs)} shown, {data.get('total', '?')} total):")
                         for log in logs[:10]:
-                            parts.append(f"  - {log.get('event_type', '?')} | user: {log.get('user_email', log.get('email', '?'))} | resource: {log.get('resource', '?')} | action: {log.get('action', '?')} | timestamp: {log.get('timestamp', '?')}")
+                            email = log.get("user_email") or log.get("email") or log.get("metadata", {}).get("user_email", "?")
+                            parts.append(f"  - {log.get('event_type', '?')} | user: {email} | resource: {log.get('resource', '?')} | action: {log.get('action', '?')} | time: {log.get('timestamp', '?')}")
             except Exception as e:
                 await logger.awarning("live_context_audit_failed", error=str(e))
 
         if any(w in query_lower for w in ["estadística", "stats", "statistics", "métrica", "metrics", "count", "total"]):
             try:
-                resp = await self._http.get(f"{self._audit_service_url}/api/v1/audit/stats", timeout=10.0)
+                resp = await self._http.get(f"{self._audit_service_url}/api/v1/audit/stats", headers=headers, timeout=10.0)
                 if resp.status_code == 200:
                     stats = resp.json()
                     parts.append(f"System statistics: {stats}")
