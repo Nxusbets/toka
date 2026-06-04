@@ -14,14 +14,19 @@ SYSTEM_PROMPT = """You are Toka AI Assistant, a specialized AI assistant for use
 You help users understand their data, generate reports, and answer questions about user activity.
 
 When answering questions:
-1. Use the provided context to ground your answers
-2. If the context doesn't contain relevant information, say so
-3. Be concise and accurate
-4. For reports, follow chain-of-thought reasoning
+1. Use the provided context (documents + live system data) to ground your answers
+2. If you have live system data, use it to give accurate, specific answers
+3. If neither context nor live data contains relevant information, say so
+4. Be concise and accurate
+5. For reports, follow chain-of-thought reasoning
 
 Examples:
 Q: How many active users do we have?
-A: Based on the data, there are X active users.
+A: Based on the live system data, there are X active users out of Y total.
+
+Q: Show me the audit logs
+A: Here are the recent audit logs:
+- user.registered | user@email.com | auth | ...
 
 Q: Generate a weekly activity report for user John.
 A: Let me analyze John's activity step by step.
@@ -32,11 +37,70 @@ Finally, I'll summarize key metrics...
 
 
 class QueryUseCase:
-    def __init__(self, vector_repo: VectorRepository, query_log_repo: QueryLogRepository, llm_client: Any, embed_client: Any):
+    def __init__(self, vector_repo: VectorRepository, query_log_repo: QueryLogRepository,
+                 llm_client: Any, embed_client: Any, http_client: Optional[httpx.AsyncClient] = None,
+                 user_service_url: str = "", audit_service_url: str = ""):
         self._vector_repo = vector_repo
         self._query_log_repo = query_log_repo
         self._llm = llm_client
         self._embed = embed_client
+        self._http = http_client
+        self._user_service_url = user_service_url
+        self._audit_service_url = audit_service_url
+
+    async def _fetch_live_context(self, user_query: str) -> str:
+        if not self._http:
+            return ""
+        query_lower = user_query.lower()
+        parts: list[str] = []
+
+        if any(w in query_lower for w in ["usuario", "user", "usuarios", "users", "cuenta", "account", "rol", "role", "permiso", "permission"]):
+            try:
+                resp = await self._http.get(f"{self._user_service_url}/api/v1/users?page=1&size=20", timeout=10.0)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    users = data if isinstance(data, list) else data.get("items", data.get("results", []))
+                    if users:
+                        parts.append(f"Users in the system ({len(users)} shown):")
+                        for u in users:
+                            parts.append(f"  - {u.get('email', '?')} | username: {u.get('username', '?')} | active: {u.get('is_active', '?')} | roles: {u.get('roles', u.get('role_ids', []))}")
+            except Exception as e:
+                await logger.awarning("live_context_user_failed", error=str(e))
+
+            try:
+                resp = await self._http.get(f"{self._user_service_url}/api/v1/roles", timeout=10.0)
+                if resp.status_code == 200:
+                    roles = resp.json()
+                    if roles:
+                        parts.append(f"Roles in the system ({len(roles)} total):")
+                        for r in roles:
+                            parts.append(f"  - {r.get('name', '?')}: {r.get('description', '')} | permissions: {r.get('permissions', [])}")
+            except Exception as e:
+                await logger.awarning("live_context_roles_failed", error=str(e))
+
+        if any(w in query_lower for w in ["auditoría", "audit", "log", "actividad", "activity", "evento", "event"]):
+            try:
+                resp = await self._http.get(f"{self._audit_service_url}/api/v1/audit/logs?page=1&size=20", timeout=10.0)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    logs = data if isinstance(data, list) else data.get("items", data.get("results", []))
+                    if logs:
+                        parts.append(f"Recent audit logs ({len(logs)} shown):")
+                        for log in logs[:10]:
+                            parts.append(f"  - {log.get('event_type', '?')} | user: {log.get('user_email', log.get('email', '?'))} | resource: {log.get('resource', '?')} | action: {log.get('action', '?')} | timestamp: {log.get('timestamp', '?')}")
+            except Exception as e:
+                await logger.awarning("live_context_audit_failed", error=str(e))
+
+        if any(w in query_lower for w in ["estadística", "stats", "statistics", "métrica", "metrics", "count", "total"]):
+            try:
+                resp = await self._http.get(f"{self._audit_service_url}/api/v1/audit/stats", timeout=10.0)
+                if resp.status_code == 200:
+                    stats = resp.json()
+                    parts.append(f"System statistics: {stats}")
+            except Exception as e:
+                await logger.awarning("live_context_stats_failed", error=str(e))
+
+        return "\n\n".join(parts)
 
     async def execute(self, user_query: str, user_id: Optional[str] = None, collection: str = "documents") -> Query:
         start_time = time.monotonic()
@@ -54,9 +118,15 @@ class QueryUseCase:
             for i, doc in enumerate(context_docs)
         ])
 
+        live_context = await self._fetch_live_context(user_query)
+
+        full_context = context_text
+        if live_context:
+            full_context = full_context + "\n\n## Live System Data\n\n" + live_context if context_docs else live_context
+
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Relevant Context:\n{context_text}\n\nUser Query: {user_query}"},
+            {"role": "user", "content": f"Relevant Context:\n{full_context}\n\nUser Query: {user_query}"},
         ]
 
         response = await self._llm.chat.completions.create(

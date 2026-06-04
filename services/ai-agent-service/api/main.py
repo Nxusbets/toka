@@ -45,7 +45,12 @@ async def lifespan(app: FastAPI):
     app.state.query_log_repo = query_log_repo
     app.state.mq_publisher = mq_publisher
 
-    app.state.query_use_case = QueryUseCase(vector_repo, query_log_repo, llm_client, embed_client)
+    app.state.query_use_case = QueryUseCase(
+        vector_repo, query_log_repo, llm_client, embed_client,
+        http_client=http_client,
+        user_service_url="http://user-service:8000",
+        audit_service_url="http://audit-service:8000",
+    )
     app.state.ingest_use_case = IngestDocumentUseCase(vector_repo, embed_client)
     app.state.report_use_case = ReportUseCase(llm_client, http_client, "http://user-service:8000")
     app.state.evaluate_use_case = EvaluateUseCase(query_log_repo)
