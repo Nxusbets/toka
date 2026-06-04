@@ -57,12 +57,15 @@ class QueryUseCase:
 
         if any(w in query_lower for w in ["usuario", "user", "usuarios", "users", "cuenta", "account", "rol", "role", "permiso", "permission"]):
             try:
-                resp = await self._http.get(f"{self._user_service_url}/api/v1/users?page=1&size=20", headers=headers, timeout=10.0)
+                resp = await self._http.get(f"{self._user_service_url}/api/v1/users?page=1&size=20&sort_by=created_at&sort_order=desc", headers=headers, timeout=10.0)
                 if resp.status_code == 200:
                     data = resp.json()
                     users = data if isinstance(data, list) else data.get("items", data.get("results", []))
                     if users:
-                        parts.append(f"Users in the system ({len(users)} shown, {data.get('total', '?')} total):")
+                        total = data.get("total", len(users))
+                        most_recent = users[0]
+                        parts.append(f"System has {total} users total (showing {len(users)}). Users are listed from newest to oldest:")
+                        parts.append(f"  Most recent: {most_recent.get('email','?')} (username: {most_recent.get('username','?')}, created: {most_recent.get('created_at','?')})")
                         for u in users:
                             parts.append(f"  - {u.get('email', '?')} | username: {u.get('username', '?')} | active: {u.get('is_active', '?')} | created: {u.get('created_at', '?')}")
             except Exception as e:
